@@ -50,13 +50,14 @@ class QdrantStorage:
 
     def __init__(self, url=None, collection=None, dim=None):
         url = url or os.getenv("QDRANT_URL", "http://localhost:6333")
+        api_key = os.getenv("QDRANT_API_KEY")
         collection = collection or os.getenv("QDRANT_COLLECTION", "docs")
         dim = dim or int(os.getenv("EMBED_DIM", str(self._default_dim())))
         local_path = os.getenv("QDRANT_PATH", "qdrant_storage")
 
         # Prefer remote Qdrant when available, but fall back to embedded/local mode.
         try:
-            self.client = QdrantClient(url=url, timeout=30)
+            self.client = QdrantClient(url=url, api_key=api_key, timeout=30)
             self.client.get_collections()
         except Exception:
             self.client = self._create_local_client(local_path)
