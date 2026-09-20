@@ -45,11 +45,10 @@ Core design patterns:
 ├── qdrant_storage/         # Embedded/local Qdrant data path
 ├── uploads/                # Uploaded PDFs
 ├── doc.md                  # Extended technical walkthrough
-└── rag-engine/             # Packaged production structure
-    ├── src/rag_engine/
-    ├── tests/
-    ├── docker/
-    └── pyproject.toml
+├── src/rag_engine/
+├── tests/
+├── docker/
+└── pyproject.toml
 ```
 
 ## Quick Start (Windows PowerShell)
