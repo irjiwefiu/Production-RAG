@@ -400,7 +400,7 @@ def _inngest_enabled() -> bool:
     return os.getenv("INNGEST_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _check_endpoint(url: str, timeout: float = 1.5) -> tuple[bool, str]:
+def _check_endpoint(url: str, timeout: float = 10.0) -> tuple[bool, str]:
     try:
         response = requests.get(url, timeout=timeout)
         return True, str(response.status_code)

@@ -119,6 +119,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
                 model=GEMINI_EMBED_MODEL,
                 content=text,
                 task_type="retrieval_document",
+                output_dimensionality=dim,
             )
             vectors.append(result["embedding"])
         return vectors

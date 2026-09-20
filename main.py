@@ -269,11 +269,6 @@ inngest_client = inngest.Inngest(
     throttle=inngest.Throttle(
         limit=2, period=datetime.timedelta(minutes=1)
     ),
-    rate_limit=inngest.RateLimit(
-        limit=1,
-        period=datetime.timedelta(hours=4),
-        key="event.data.source_id",
-  ),
 )
 async def rag_ingest_pdf(ctx: inngest.Context):
     def _load(ctx: inngest.Context) -> RAGChunkAndSrc:
