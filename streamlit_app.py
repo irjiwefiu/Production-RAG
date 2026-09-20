@@ -233,9 +233,9 @@ def _source_hint() -> str | None:
     return None
 
 
-async def send_rag_ingest_event(pdf_path: Path) -> None:
+async def send_rag_ingest_event(pdf_path: Path) -> str:
     client = get_inngest_client()
-    await client.send(
+    result = await client.send(
         inngest.Event(
             name="rag/ingest_pdf",
             data={
@@ -244,6 +244,7 @@ async def send_rag_ingest_event(pdf_path: Path) -> None:
             },
         )
     )
+    return result[0]
 
 
 async def send_rag_query_event(question: str, top_k: int, source_hint: str | None = None) -> str:
@@ -538,9 +539,10 @@ if uploaded is not None:
                 st.info(_local_fallback_help())
             st.stop()
         try:
-            asyncio.run(send_rag_ingest_event(path))
-            time.sleep(0.3)
-            st.success(f"Triggered ingestion for: {path.name}")
+            event_id = asyncio.run(send_rag_ingest_event(path))
+            result = wait_for_run_output(event_id)
+            ingested = int(result.get("ingested", 0))
+            st.success(f"Ingested {ingested} chunks and uploaded them to Qdrant: {path.name}")
             st.caption("You can upload another PDF if you like.")
         except Exception as exc:
             if _is_send_events_error(exc):
