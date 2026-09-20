@@ -1,7 +1,10 @@
 from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance, PointStruct
+from dotenv import load_dotenv
 import os
 import atexit
+
+load_dotenv()
 
 
 class QdrantStorage:
@@ -24,6 +27,27 @@ class QdrantStorage:
             os.makedirs(fallback_path, exist_ok=True)
             return QdrantClient(path=fallback_path)
 
+    @staticmethod
+    def _get_vector_size_from_collection_info(info) -> int | None:
+        try:
+            params = getattr(info, "config", None)
+            if params is None:
+                return None
+            params = getattr(params, "params", None) or params
+            vectors = getattr(params, "vectors", None)
+            if isinstance(vectors, dict):
+                vector_cfg = next(iter(vectors.values()), None)
+                if vector_cfg is not None and hasattr(vector_cfg, "size"):
+                    return int(vector_cfg.size)
+                return None
+            if hasattr(vectors, "size"):
+                return int(vectors.size)
+            if isinstance(vectors, int):
+                return int(vectors)
+            return None
+        except Exception:
+            return None
+
     def __init__(self, url=None, collection=None, dim=None):
         url = url or os.getenv("QDRANT_URL", "http://localhost:6333")
         collection = collection or os.getenv("QDRANT_COLLECTION", "docs")
@@ -38,6 +62,17 @@ class QdrantStorage:
             self.client = self._create_local_client(local_path)
 
         self.collection = collection
+        self.dim = dim
+
+        if self.client.collection_exists(self.collection):
+            try:
+                info = self.client.get_collection(self.collection)
+                actual_dim = self._get_vector_size_from_collection_info(info)
+                if actual_dim is not None and actual_dim != dim:
+                    self.client.delete_collection(self.collection)
+            except Exception:
+                pass
+
         if not self.client.collection_exists(self.collection):
             self.client.create_collection(
                 collection_name=self.collection,

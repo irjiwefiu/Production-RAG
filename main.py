@@ -15,7 +15,6 @@ from data_loader import load_and_chunk_pdf, embed_texts
 from vector_db import get_qdrant_storage
 from custom_types import RAGSearchResult, RAGUpsertResult, RAGChunkAndSrc
 
-
 load_dotenv()
 
 _STOPWORDS = {
@@ -35,7 +34,7 @@ def _ollama_headers() -> dict[str, str]:
 def _get_llm_config() -> tuple[str, str, str, str, str, str]:
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
     openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
     claude_model = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-latest")
     ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1")
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
@@ -45,7 +44,6 @@ def _get_llm_config() -> tuple[str, str, str, str, str, str]:
 def _compact_spaced_letters(text: str) -> str:
     # Converts OCR-style spaced words like "A c h i e v e d" -> "Achieved".
     return re.sub(r"\b(?:[A-Za-z]\s+){2,}[A-Za-z]\b", lambda m: m.group(0).replace(" ", ""), text)
-
 
 def _normalize_for_match(text: str) -> str:
     compact = _compact_spaced_letters(text).lower()

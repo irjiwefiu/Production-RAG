@@ -12,7 +12,7 @@ load_dotenv()
 
 EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "openai").lower()
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-large")
-GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
+GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "gemini-embedding-001")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 

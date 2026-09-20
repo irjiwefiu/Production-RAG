@@ -12,7 +12,7 @@ This repository includes:
 - A packaged implementation under rag-engine with modular API, core services, and tests.
 
 ## Why This Project
-
+.mod
 The goal is practical document intelligence, not notebook demos:
 - Multi-provider LLM and embedding support: OpenAI, Gemini, Claude, Ollama, and local fallback paths.
 - Durable workflow mode using Inngest step functions.
@@ -186,4 +186,4 @@ Add your preferred license file (MIT, Apache-2.0, etc.) at repository root.
 
 ---
 
-Built for real-world RAG operations by Adil Shamim.
+Built for real-world RAG operations by Muhammad Hasnain.
