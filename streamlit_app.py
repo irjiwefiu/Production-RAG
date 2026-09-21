@@ -3,14 +3,11 @@ import json
 import os
 from pathlib import Path
 import time
-import uuid
 
 import inngest
 import requests
 import streamlit as st
 from dotenv import load_dotenv, set_key
-from data_loader import load_and_chunk_pdf, embed_texts
-from vector_db import get_qdrant_storage
 
 load_dotenv()
 ENV_FILE = Path(".env").resolve()
@@ -176,12 +173,6 @@ def _render_model_settings() -> None:
         key="settings_ollama_key",
     )
 
-    inngest_enabled = st.sidebar.checkbox(
-        "Use Inngest workflow mode",
-        value=os.getenv("INNGEST_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
-        key="settings_inngest_enabled",
-    )
-
     save = st.sidebar.button("Save settings", key="settings_save")
 
     if save:
@@ -190,8 +181,6 @@ def _render_model_settings() -> None:
         _save_env("EMBED_PROVIDER", embed_provider)
         _save_env(embed_model_key, embed_model)
         _save_env("EMBED_DIM", str(int(embed_dim)))
-        _save_env("INNGEST_ENABLED", "true" if inngest_enabled else "false")
-        _save_env("INNGEST_DEV", "1" if inngest_enabled else "0")
 
         if openai_key:
             _save_env("OPENAI_API_KEY", openai_key)
@@ -264,162 +253,8 @@ async def send_rag_query_event(question: str, top_k: int, source_hint: str | Non
     return result[0]
 
 
-def _send_error_message(exc: Exception) -> str:
-    return (
-        f"Failed to send event to Inngest: {exc}. "
-        "Make sure Inngest Dev Server is running and connected to your FastAPI app. "
-        "Docs flow: set INNGEST_DEV=1, run FastAPI on http://127.0.0.1:8000, then run Inngest Dev Server "
-        "with update URL http://127.0.0.1:8000/api/inngest (or use Docker fallback from docs). "
-        "Expected default endpoint: http://127.0.0.1:8288"
-    )
-
-
-def _is_send_events_error(exc: Exception) -> bool:
-    return exc.__class__.__name__ == "SendEventsError"
-
-
-def _run_ingest_locally(pdf_path: Path) -> int:
-    backend_payload = _post_backend_json(
-        "/api/local-ingest",
-        {
-            "pdf_path": str(pdf_path.resolve()),
-            "source_id": pdf_path.name,
-        },
-        timeout=120,
-    )
-    if isinstance(backend_payload, dict) and isinstance(backend_payload.get("ingested"), int):
-        return int(backend_payload["ingested"])
-
-    chunks = load_and_chunk_pdf(str(pdf_path.resolve()))
-    vectors = embed_texts(chunks)
-    source_id = pdf_path.name
-    ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_id}:{i}")) for i in range(len(chunks))]
-    payloads = [{"source": source_id, "text": chunks[i]} for i in range(len(chunks))]
-    get_qdrant_storage().upsert(ids, vectors, payloads)
-    return len(chunks)
-
-
-def _run_query_locally(question: str, top_k: int, source_hint: str | None = None) -> dict:
-    backend_query_payload = {"question": question, "top_k": int(top_k)}
-    if source_hint:
-        backend_query_payload["source_hint"] = source_hint
-
-    backend_payload = _post_backend_json(
-        "/api/local-query-ai",
-        backend_query_payload,
-        timeout=120,
-    )
-    if isinstance(backend_payload, dict) and "answer" in backend_payload:
-        return {
-            "answer": backend_payload.get("answer", ""),
-            "sources": backend_payload.get("sources", []),
-            "num_contexts": int(backend_payload.get("num_contexts", 0)),
-        }
-
-    query_vec = embed_texts([question])[0]
-    found = get_qdrant_storage().search(query_vec, top_k)
-    context_block = "\n\n".join(f"- {chunk}" for chunk in found["contexts"])
-    user_content = (
-        "Use the following context to answer the question.\n\n"
-        f"Context:\n{context_block}\n\n"
-        f"Question: {question}\n"
-        "Answer concisely using the context above."
-    )
-
-    # Reuse the provider-aware generator configured in main.py.
-    from main import generate_answer
-
-    answer = generate_answer(user_content)
-    return {
-        "answer": answer,
-        "sources": found["sources"],
-        "num_contexts": len(found["contexts"]),
-    }
-
-
-def _run_query_context_only(question: str, top_k: int, source_hint: str | None = None) -> dict:
-    backend_query_payload = {"question": question, "top_k": int(top_k)}
-    if source_hint:
-        backend_query_payload["source_hint"] = source_hint
-
-    backend_payload = _post_backend_json(
-        "/api/local-query-context",
-        backend_query_payload,
-        timeout=60,
-    )
-    if isinstance(backend_payload, dict) and "answer" in backend_payload:
-        return {
-            "answer": backend_payload.get("answer", ""),
-            "sources": backend_payload.get("sources", []),
-            "num_contexts": int(backend_payload.get("num_contexts", 0)),
-        }
-
-    query_vec = embed_texts([question])[0]
-    found = get_qdrant_storage().search(query_vec, top_k)
-    contexts = found.get("contexts", [])
-    if not contexts:
-        answer = "I could not find relevant context in indexed documents for this question."
-    else:
-        answer = f"Based on retrieved context: {contexts[0][:900]}"
-    return {
-        "answer": answer,
-        "sources": found.get("sources", []),
-        "num_contexts": len(contexts),
-    }
-
-
-def _local_fallback_help() -> str:
-    return (
-        "Local fallback requires a configured model provider. "
-        "Set EMBED_PROVIDER and LLM_PROVIDER plus required credentials in the Model Settings sidebar. "
-        "Examples: OPENAI_API_KEY for openai, or OLLAMA_BASE_URL and OLLAMA_API_KEY for ollama. "
-        "Also ensure vector storage is reachable via QDRANT_URL, or set QDRANT_PATH for embedded local storage."
-    )
-
-
-def _fastapi_base_url() -> str:
-    return os.getenv("FASTAPI_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-
-
-def _post_backend_json(path: str, payload: dict, timeout: float) -> dict | None:
-    try:
-        response = requests.post(f"{_fastapi_base_url()}{path}", json=payload, timeout=timeout)
-        response.raise_for_status()
-        data = response.json()
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        return None
-    return None
-
-
 def _inngest_api_base() -> str:
     return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
-
-
-def _inngest_enabled() -> bool:
-    return os.getenv("INNGEST_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _check_endpoint(url: str, timeout: float = 10.0) -> tuple[bool, str]:
-    try:
-        response = requests.get(url, timeout=timeout)
-        return True, str(response.status_code)
-    except requests.RequestException as exc:
-        return False, str(exc)
-
-
-def _render_inngest_preflight() -> None:
-    if not _inngest_enabled():
-        return
-
-    api_ok, api_info = _check_endpoint("http://127.0.0.1:8000/api/inngest")
-    dev_ok, dev_info = _check_endpoint("http://127.0.0.1:8288")
-
-    if api_ok and dev_ok:
-        return
-
-    st.error("Inngest is unavailable. The request will use local fallback mode.")
 
 
 def fetch_runs(event_id: str) -> list[dict]:
@@ -469,7 +304,7 @@ def _pick_best_run(runs: list[dict]) -> dict:
         if _normalized_status(run.get("status")) in terminal_statuses:
             return run
 
-    # Fallback to first run returned by API.
+    # Use the first run when no stronger match is available.
     return runs[0]
 
 
@@ -508,22 +343,12 @@ def wait_for_run_output(event_id: str, timeout_s: float | None = None, poll_inte
 
 
 st.title("Upload a PDF to Ingest")
-_render_inngest_preflight()
 uploaded = st.file_uploader("Choose a PDF", type=["pdf"], accept_multiple_files=False)
 
 if uploaded is not None:
     with st.spinner("Uploading and triggering ingestion..."):
         path = save_uploaded_pdf(uploaded)
         st.session_state["last_uploaded_source"] = path.name
-        if not _inngest_enabled():
-            try:
-                ingested = _run_ingest_locally(path)
-                st.success(f"Ingested locally: {ingested} chunks from {path.name}")
-                st.caption("Inngest is disabled by config.")
-            except Exception as local_exc:
-                st.error(f"Local ingestion failed: {local_exc}")
-                st.info(_local_fallback_help())
-            st.stop()
         try:
             event_id = asyncio.run(send_rag_ingest_event(path))
             result = wait_for_run_output(event_id)
@@ -531,16 +356,7 @@ if uploaded is not None:
             st.success(f"Ingested {ingested} chunks and uploaded them to Qdrant: {path.name}")
             st.caption("You can upload another PDF if you like.")
         except Exception as exc:
-            if _is_send_events_error(exc):
-                st.warning(_send_error_message(exc))
-                try:
-                    ingested = _run_ingest_locally(path)
-                    st.success(f"Inngest unavailable. Ingested locally: {ingested} chunks from {path.name}")
-                except Exception as local_exc:
-                    st.error(f"Local ingestion failed: {local_exc}")
-                    st.info(_local_fallback_help())
-            else:
-                st.error(f"Unexpected ingestion error: {exc}")
+            st.error(f"Ingestion workflow failed: {exc}")
 
 st.divider()
 st.title("Ask a question about your PDFs")
@@ -553,20 +369,6 @@ with st.form("rag_query_form"):
     if submitted and question.strip():
         with st.spinner("Sending event and generating answer..."):
             source_hint = _source_hint()
-            if not _inngest_enabled():
-                try:
-                    output = _run_query_locally(question.strip(), int(top_k), source_hint=source_hint)
-                    st.subheader("Answer")
-                    st.write(output.get("answer", "") or "(No answer)")
-                    sources = output.get("sources", [])
-                    if sources:
-                        st.caption("Sources")
-                        for s in sources:
-                            st.write(f"- {s}")
-                except Exception as local_exc:
-                    st.error(f"Local query failed: {local_exc}")
-                    st.info(_local_fallback_help())
-                st.stop()
             try:
                 event_id = asyncio.run(send_rag_query_event(question.strip(), int(top_k), source_hint=source_hint))
                 output = wait_for_run_output(event_id)
@@ -579,38 +381,6 @@ with st.form("rag_query_form"):
                     st.caption("Sources")
                     for s in sources:
                         st.write(f"- {s}")
-            except requests.RequestException as exc:
-                st.error(f"Failed to read Inngest run output: {exc}")
-            except (TimeoutError, RuntimeError) as exc:
-                st.warning(f"{exc}. Falling back to context-only retrieval mode.")
-                try:
-                    output = _run_query_context_only(question.strip(), int(top_k), source_hint=source_hint)
-                    st.subheader("Answer")
-                    st.write(output.get("answer", "") or "(No answer)")
-                    sources = output.get("sources", [])
-                    if sources:
-                        st.caption("Sources")
-                        for s in sources:
-                            st.write(f"- {s}")
-                except Exception as local_exc:
-                    st.error(f"Context-only fallback failed: {local_exc}")
-                    st.info(_local_fallback_help())
             except Exception as exc:
-                if _is_send_events_error(exc):
-                    try:
-                        output = _run_query_locally(question.strip(), int(top_k), source_hint=source_hint)
-                        st.info("Inngest was unavailable, so this answer was generated using local fallback mode.")
-                        st.subheader("Answer")
-                        st.write(output.get("answer", "") or "(No answer)")
-                        sources = output.get("sources", [])
-                        if sources:
-                            st.caption("Sources")
-                            for s in sources:
-                                st.write(f"- {s}")
-                    except Exception as local_exc:
-                        st.error(f"Local query failed: {local_exc}")
-                        st.warning(_send_error_message(exc))
-                        st.info(_local_fallback_help())
-                else:
-                    st.error(f"Unexpected query error: {exc}")
+                st.error(f"Query workflow failed: {exc}")
 
