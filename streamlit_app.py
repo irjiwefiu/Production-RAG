@@ -201,8 +201,9 @@ _render_model_settings()
 def get_inngest_client() -> inngest.Inngest:
     return inngest.Inngest(
         app_id="rag_app",
-        is_production=False,
-        event_api_base_url=os.getenv("INNGEST_EVENT_API_BASE", "http://127.0.0.1:8288"),
+        is_production=True,
+        api_base_url=os.getenv("INNGEST_API_BASE", "https://api.inngest.com"),
+        event_api_base_url=os.getenv("INNGEST_EVENT_API_BASE", "https://inn.gs"),
     )
 
 
@@ -254,7 +255,7 @@ async def send_rag_query_event(question: str, top_k: int, source_hint: str | Non
 
 
 def _inngest_api_base() -> str:
-    return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
+    return os.getenv("INNGEST_API_BASE", "https://api.inngest.com/v1").rstrip("/")
 
 
 def fetch_runs(event_id: str) -> list[dict]:
