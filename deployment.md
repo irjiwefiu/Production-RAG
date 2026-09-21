@@ -4,14 +4,11 @@ This guide deploys the current root application to Render using Gemini and Qdran
 
 ## Recommended Render setup
 
-Start with **one Render Web Service** running Streamlit. This matches the current application behavior:
+Use two Render Web Services: one for Streamlit and one for FastAPI. This keeps ingestion and querying on a stable API service:
 
-- Streamlit receives and stores the uploaded PDF.
-- The app processes the PDF and creates embeddings.
+- Streamlit uploads the PDF to FastAPI.
+- FastAPI processes the PDF and creates embeddings.
 - Vectors are persisted in Qdrant Cloud.
-- Inngest is disabled on Render unless a separate production Inngest service is configured.
-
-The local Inngest Dev Server is for development only. Do not use `npx inngest-cli dev` as the production process on Render.
 
 ## 1. Create the Render service
 
@@ -47,8 +44,7 @@ QDRANT_URL=https://<your-qdrant-cluster>.cloud.qdrant.io
 QDRANT_API_KEY=<your-qdrant-api-key>
 QDRANT_COLLECTION=docs
 
-INNGEST_ENABLED=false
-INNGEST_DEV=0
+FASTAPI_BASE_URL=https://<your-fastapi-service>.onrender.com
 ```
 
 Optional settings:
@@ -93,27 +89,16 @@ The application currently uses:
 
 Keep the Gemini and Qdrant keys in Render's encrypted environment settings. Do not put them in Streamlit UI code, GitHub, or committed `.env` files.
 
-## 6. Inngest production architecture
+## 6. FastAPI service
 
-The local workflow uses a PDF path such as `uploads/document.pdf`. That path exists only inside the process that received the upload. Therefore, separate Render services cannot share that path automatically.
+Create a second Render Web Service from the same repository with:
 
-For a production Inngest deployment, use this architecture:
+| Setting | Value |
+| --- | --- |
+| Build command | `pip install .` |
+| Start command | `uvicorn main:app --host 0.0.0.0 --port $PORT` |
 
-1. Upload the PDF to durable object storage such as S3, Cloudflare R2, or Supabase Storage.
-2. Send the object URL or object key in the Inngest event, instead of a local file path.
-3. Run FastAPI as a separate Render Web Service.
-4. Configure Streamlit with:
-
-```text
-FASTAPI_BASE_URL=https://<your-fastapi-service>.onrender.com
-INNGEST_ENABLED=true
-INNGEST_API_BASE=<your-inngest-api-url>
-INNGEST_EVENT_API_BASE=<your-inngest-event-api-url>
-```
-
-5. Use Inngest Cloud or a separately managed Inngest-compatible production service. Do not rely on the in-memory local Inngest Dev Server for production data.
-
-This upgrade also requires changing the ingestion payload and backend loader to download the PDF from object storage before parsing it.
+Configure the Gemini, embedding, Qdrant, and `EMBED_DIM` variables on this service too. Set `FASTAPI_BASE_URL` only on the Streamlit service.
 
 ## 7. Common Render problems
 
@@ -140,10 +125,6 @@ Render's local disk is ephemeral. The vectors remain in Qdrant Cloud, but upload
 ## Local development commands
 
 ```powershell
-$env:INNGEST_DEV='1'
 python -m uvicorn main:app --host 127.0.0.1 --port 8000
-
-npx --ignore-scripts=false inngest-cli@latest dev -u http://127.0.0.1:8000/api/inngest --no-discovery
-
 python -m streamlit run streamlit_app.py
 ```

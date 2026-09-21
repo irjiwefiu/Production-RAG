@@ -1,11 +1,8 @@
 import logging
-from fastapi import FastAPI
-import inngest
-import inngest.fast_api
+from fastapi import FastAPI, File, UploadFile
 from dotenv import load_dotenv
 import uuid
 import os
-import datetime
 import requests
 import importlib
 import re
@@ -13,7 +10,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 from data_loader import load_and_chunk_pdf, embed_texts
 from vector_db import get_qdrant_storage
-from custom_types import RAGSearchResult, RAGUpsertResult, RAGChunkAndSrc
+from custom_types import RAGSearchResult
 
 load_dotenv()
 
@@ -256,79 +253,6 @@ def generate_answer(user_content: str) -> str:
 
     raise ValueError("Unsupported LLM_PROVIDER. Use one of: openai, gemini, claude, ollama, local")
 
-inngest_client = inngest.Inngest(
-    app_id="rag_app",
-    logger=logging.getLogger("uvicorn"),
-    is_production=True,
-    serializer=inngest.PydanticSerializer()
-)
-
-@inngest_client.create_function(
-    fn_id="RAG: Ingest PDF",
-    trigger=inngest.TriggerEvent(event="rag/ingest_pdf"),
-    throttle=inngest.Throttle(
-        limit=2, period=datetime.timedelta(minutes=1)
-    ),
-)
-async def rag_ingest_pdf(ctx: inngest.Context):
-    def _load(ctx: inngest.Context) -> RAGChunkAndSrc:
-        pdf_path = ctx.event.data["pdf_path"]
-        source_id = ctx.event.data.get("source_id", pdf_path)
-        chunks = load_and_chunk_pdf(pdf_path)
-        return RAGChunkAndSrc(chunks=chunks, source_id=source_id)
-
-    def _upsert(chunks_and_src: RAGChunkAndSrc) -> RAGUpsertResult:
-        chunks = chunks_and_src.chunks
-        source_id = chunks_and_src.source_id
-        vecs = embed_texts(chunks)
-        ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_id}:{i}")) for i in range(len(chunks))]
-        payloads = [{"source": source_id, "text": chunks[i]} for i in range(len(chunks))]
-        get_qdrant_storage().upsert(ids, vecs, payloads)
-        return RAGUpsertResult(ingested=len(chunks))
-
-    chunks_and_src = await ctx.step.run("load-and-chunk", lambda: _load(ctx), output_type=RAGChunkAndSrc)
-    ingested = await ctx.step.run("embed-and-upsert", lambda: _upsert(chunks_and_src), output_type=RAGUpsertResult)
-    return ingested.model_dump()
-
-
-@inngest_client.create_function(
-    fn_id="RAG: Query PDF",
-    trigger=inngest.TriggerEvent(event="rag/query_pdf_ai")
-)
-async def rag_query_pdf_ai(ctx: inngest.Context):
-    def _search(question: str, top_k: int = 5, source_hint: str | None = None) -> RAGSearchResult:
-        found = _search_contexts(question, top_k, source_hint)
-        return RAGSearchResult(contexts=found["contexts"], sources=found["sources"])
-
-    question = ctx.event.data["question"]
-    top_k = int(ctx.event.data.get("top_k", 5))
-    source_hint = ctx.event.data.get("source_hint")
-
-    found = await ctx.step.run(
-        "embed-and-search",
-        lambda: _search(question, top_k, source_hint),
-        output_type=RAGSearchResult,
-    )
-
-    context_block = "\n\n".join(f"- {c}" for c in found.contexts)
-    user_content = (
-        "Use the following context to answer the question.\n\n"
-        f"Context:\n{context_block}\n\n"
-        f"Question: {question}\n"
-        "Answer concisely using the context above."
-    )
-
-    def _safe_answer() -> str:
-        try:
-            return generate_answer(user_content)
-        except Exception as exc:
-            logging.exception("LLM generation failed, using local context fallback: %s", exc)
-            return _local_answer(user_content)
-
-    answer = await ctx.step.run("llm-answer", _safe_answer)
-    return {"answer": answer, "sources": found.sources, "num_contexts": len(found.contexts)}
-
-
 class LocalIngestRequest(BaseModel):
     pdf_path: str
     source_id: str | None = None
@@ -377,6 +301,23 @@ def _context_prompt(question: str, contexts: list[str]) -> str:
 app = FastAPI()
 
 
+@app.post("/api/ingest")
+async def ingest_pdf(file: UploadFile = File(...)):
+    uploads_dir = "uploads"
+    os.makedirs(uploads_dir, exist_ok=True)
+    filename = os.path.basename(file.filename or "document.pdf")
+    pdf_path = os.path.join(uploads_dir, filename)
+    with open(pdf_path, "wb") as output_file:
+        output_file.write(await file.read())
+
+    chunks = load_and_chunk_pdf(pdf_path)
+    vectors = embed_texts(chunks)
+    ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"{filename}:{i}")) for i in range(len(chunks))]
+    payloads = [{"source": filename, "text": chunks[i]} for i in range(len(chunks))]
+    get_qdrant_storage().upsert(ids, vectors, payloads)
+    return {"ingested": len(chunks), "source_id": filename}
+
+
 @app.post("/api/local-ingest")
 async def local_ingest(payload: LocalIngestRequest):
     source_id = payload.source_id or payload.pdf_path
@@ -410,5 +351,3 @@ async def local_query_ai(payload: LocalQueryRequest):
         "sources": found.get("sources", []),
         "num_contexts": len(contexts),
     }
-
-inngest.fast_api.serve(app, inngest_client, [rag_ingest_pdf, rag_query_pdf_ai])

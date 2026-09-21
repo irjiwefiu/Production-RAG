@@ -1,10 +1,6 @@
-import asyncio
-import json
 import os
 from pathlib import Path
-import time
 
-import inngest
 import requests
 import streamlit as st
 from dotenv import load_dotenv, set_key
@@ -197,23 +193,6 @@ def _render_model_settings() -> None:
 
 _render_model_settings()
 
-@st.cache_resource
-def get_inngest_client() -> inngest.Inngest:
-    event_key = os.getenv("INNGEST_EVENT_KEY", "").strip()
-    if not event_key:
-        raise RuntimeError("INNGEST_EVENT_KEY is not configured for Inngest Cloud.")
-
-    api_base = os.getenv("INNGEST_API_BASE", "https://api.inngest.com/v1").rstrip("/")
-    api_origin = api_base.removesuffix("/v1")
-    return inngest.Inngest(
-        app_id="rag_app",
-        is_production=True,
-        api_base_url=api_origin,
-        event_api_base_url=os.getenv("INNGEST_EVENT_API_BASE", "https://inn.gs"),
-        event_key=event_key,
-    )
-
-
 def save_uploaded_pdf(file) -> Path:
     uploads_dir = Path("uploads")
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -230,141 +209,41 @@ def _source_hint() -> str | None:
     return None
 
 
-async def send_rag_ingest_event(pdf_path: Path) -> str:
-    client = get_inngest_client()
-    result = await client.send(
-        inngest.Event(
-            name="rag/ingest_pdf",
-            data={
-                "pdf_path": str(pdf_path.resolve()),
-                "source_id": pdf_path.name,
-            },
+def _fastapi_base_url() -> str:
+    return os.getenv("FASTAPI_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+
+
+def _post_backend_json(path: str, payload: dict, timeout: float = 120) -> dict:
+    response = requests.post(f"{_fastapi_base_url()}{path}", json=payload, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def _upload_pdf_to_backend(path: Path) -> dict:
+    with path.open("rb") as pdf_file:
+        response = requests.post(
+            f"{_fastapi_base_url()}/api/ingest",
+            files={"file": (path.name, pdf_file, "application/pdf")},
+            timeout=300,
         )
-    )
-    return result[0]
-
-
-async def send_rag_query_event(question: str, top_k: int, source_hint: str | None = None) -> str:
-    client = get_inngest_client()
-    payload = {
-        "question": question,
-        "top_k": top_k,
-    }
-    if source_hint:
-        payload["source_hint"] = source_hint
-    result = await client.send(
-        inngest.Event(
-            name="rag/query_pdf_ai",
-            data=payload,
-        )
-    )
-    return result[0]
-
-
-def _inngest_api_base() -> str:
-    return os.getenv("INNGEST_API_BASE", "https://api.inngest.com/v1").rstrip("/")
-
-
-def fetch_runs(event_id: str) -> list[dict]:
-    url = f"{_inngest_api_base()}/events/{event_id}/runs"
-    resp = requests.get(url, timeout=10)
-    resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, dict):
-        if isinstance(data.get("data"), list):
-            return data["data"]
-        if isinstance(data.get("runs"), list):
-            return data["runs"]
-    return []
-
-
-def _normalized_status(status: object) -> str:
-    return str(status or "").strip().lower()
-
-
-def _extract_run_output(run: dict) -> dict:
-    output = run.get("output")
-    if isinstance(output, dict):
-        return output
-    if isinstance(output, str):
-        try:
-            parsed = json.loads(output)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-    return {}
-
-
-def _pick_best_run(runs: list[dict]) -> dict:
-    if not runs:
-        return {}
-
-    terminal_statuses = {"completed", "succeeded", "success", "finished", "failed", "cancelled", "canceled", "errored", "error"}
-
-    # Prefer run with output first.
-    for run in runs:
-        if _extract_run_output(run):
-            return run
-
-    # Prefer terminal run if available.
-    for run in runs:
-        if _normalized_status(run.get("status")) in terminal_statuses:
-            return run
-
-    # Use the first run when no stronger match is available.
-    return runs[0]
-
-
-def wait_for_run_output(event_id: str, timeout_s: float | None = None, poll_interval_s: float = 0.5) -> dict:
-    if timeout_s is None:
-        timeout_s = float(os.getenv("INNGEST_RUN_TIMEOUT_S", "60"))
-
-    start = time.time()
-    last_status = None
-    poll_count = 0
-    while True:
-        runs = fetch_runs(event_id)
-        if runs:
-            run = _pick_best_run(runs)
-            status = _normalized_status(run.get("status"))
-            if status:
-                last_status = status
-
-            # Check for failure immediately.
-            if status in {"failed", "cancelled", "canceled", "errored", "error"}:
-                raise RuntimeError(f"Function run {status}")
-
-            # Some Inngest responses may populate output before terminal status.
-            output = _extract_run_output(run)
-            if output and isinstance(output, dict) and output.get("answer"):
-                return output
-
-            if status in {"completed", "succeeded", "success", "finished"}:
-                return output if output else {}
-
-        poll_count += 1
-        elapsed = time.time() - start
-        if elapsed > timeout_s:
-            raise TimeoutError(f"Timed out waiting for run output after {poll_count} polls (last status: {last_status})")
-        time.sleep(poll_interval_s)
+    response.raise_for_status()
+    return response.json()
 
 
 st.title("Upload a PDF to Ingest")
 uploaded = st.file_uploader("Choose a PDF", type=["pdf"], accept_multiple_files=False)
 
 if uploaded is not None:
-    with st.spinner("Uploading and triggering ingestion..."):
+    with st.spinner("Uploading and indexing PDF..."):
         path = save_uploaded_pdf(uploaded)
         st.session_state["last_uploaded_source"] = path.name
         try:
-            event_id = asyncio.run(send_rag_ingest_event(path))
-            result = wait_for_run_output(event_id)
+            result = _upload_pdf_to_backend(path)
             ingested = int(result.get("ingested", 0))
             st.success(f"Ingested {ingested} chunks and uploaded them to Qdrant: {path.name}")
             st.caption("You can upload another PDF if you like.")
         except Exception as exc:
-            st.error(f"Ingestion workflow failed: {exc}")
+            st.error(f"Ingestion failed: {exc}")
 
 st.divider()
 st.title("Ask a question about your PDFs")
@@ -375,11 +254,13 @@ with st.form("rag_query_form"):
     submitted = st.form_submit_button("Ask")
 
     if submitted and question.strip():
-        with st.spinner("Sending event and generating answer..."):
+        with st.spinner("Searching documents and generating answer..."):
             source_hint = _source_hint()
             try:
-                event_id = asyncio.run(send_rag_query_event(question.strip(), int(top_k), source_hint=source_hint))
-                output = wait_for_run_output(event_id)
+                output = _post_backend_json(
+                    "/api/local-query-ai",
+                    {"question": question.strip(), "top_k": int(top_k), "source_hint": source_hint},
+                )
                 answer = output.get("answer", "")
                 sources = output.get("sources", [])
 
@@ -390,5 +271,5 @@ with st.form("rag_query_form"):
                     for s in sources:
                         st.write(f"- {s}")
             except Exception as exc:
-                st.error(f"Query workflow failed: {exc}")
+                st.error(f"Query failed: {exc}")
 
