@@ -411,29 +411,15 @@ def _check_endpoint(url: str, timeout: float = 10.0) -> tuple[bool, str]:
 
 def _render_inngest_preflight() -> None:
     if not _inngest_enabled():
-        st.info("Inngest mode is disabled. Local fallback mode is active.")
         return
 
     api_ok, api_info = _check_endpoint("http://127.0.0.1:8000/api/inngest")
     dev_ok, dev_info = _check_endpoint("http://127.0.0.1:8288")
 
     if api_ok and dev_ok:
-        st.success("Inngest preflight passed: FastAPI endpoint and Dev Server are reachable.")
         return
 
-    st.warning("Inngest preflight failed. Workflow mode needs two running services.")
-    st.caption(f"FastAPI /api/inngest: {'OK' if api_ok else 'DOWN'} ({api_info})")
-    st.caption(f"Inngest Dev Server : {'OK' if dev_ok else 'DOWN'} ({dev_info})")
-    st.code(
-        "# 1) Start FastAPI (same venv as this app)\n"
-        "$env:INNGEST_DEV='1'\n"
-        "python -m uvicorn main:app --host 127.0.0.1 --port 8000\n\n"
-        "# 2) Start Inngest Dev Server (npx)\n"
-        "npx --ignore-scripts=false inngest-cli@latest dev -u http://127.0.0.1:8000/api/inngest --no-discovery\n\n"
-        "# 2b) Docker fallback if npx is unavailable\n"
-        "docker run -p 8288:8288 inngest/inngest inngest dev -u http://host.docker.internal:8000/api/inngest --no-discovery",
-        language="bash",
-    )
+    st.error("Inngest is unavailable. The request will use local fallback mode.")
 
 
 def fetch_runs(event_id: str) -> list[dict]:
@@ -611,9 +597,9 @@ with st.form("rag_query_form"):
                     st.info(_local_fallback_help())
             except Exception as exc:
                 if _is_send_events_error(exc):
-                    st.warning(_send_error_message(exc))
                     try:
                         output = _run_query_locally(question.strip(), int(top_k), source_hint=source_hint)
+                        st.info("Inngest was unavailable, so this answer was generated using local fallback mode.")
                         st.subheader("Answer")
                         st.write(output.get("answer", "") or "(No answer)")
                         sources = output.get("sources", [])
@@ -623,6 +609,7 @@ with st.form("rag_query_form"):
                                 st.write(f"- {s}")
                     except Exception as local_exc:
                         st.error(f"Local query failed: {local_exc}")
+                        st.warning(_send_error_message(exc))
                         st.info(_local_fallback_help())
                 else:
                     st.error(f"Unexpected query error: {exc}")
