@@ -4,10 +4,9 @@ This guide deploys the current root application to Render using Gemini and Qdran
 
 ## Recommended Render setup
 
-Use two Render Web Services: one for Streamlit and one for FastAPI. This keeps ingestion and querying on a stable API service:
+Use one Render Web Service running Streamlit. The app performs ingestion and querying directly in the Streamlit process:
 
-- Streamlit uploads the PDF to FastAPI.
-- FastAPI processes the PDF and creates embeddings.
+- Streamlit processes the PDF and creates embeddings.
 - Vectors are persisted in Qdrant Cloud.
 
 ## 1. Create the Render service
@@ -44,7 +43,6 @@ QDRANT_URL=https://<your-qdrant-cluster>.cloud.qdrant.io
 QDRANT_API_KEY=<your-qdrant-api-key>
 QDRANT_COLLECTION=docs
 
-FASTAPI_BASE_URL=https://<your-fastapi-service>.onrender.com
 ```
 
 Optional settings:
@@ -88,18 +86,7 @@ The application currently uses:
 
 Keep the Gemini and Qdrant keys in Render's encrypted environment settings. Do not put them in Streamlit UI code, GitHub, or committed `.env` files.
 
-## 6. FastAPI service
-
-Create a second Render Web Service from the same repository with:
-
-| Setting | Value |
-| --- | --- |
-| Build command | `pip install .` |
-| Start command | `uvicorn main:app --host 0.0.0.0 --port $PORT` |
-
-Configure the Gemini, embedding, Qdrant, and `EMBED_DIM` variables on this service too. Set `FASTAPI_BASE_URL` only on the Streamlit service.
-
-## 7. Common Render problems
+## 6. Common Render problems
 
 ### Application failed to bind to a port
 

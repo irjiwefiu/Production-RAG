@@ -1,9 +1,13 @@
 import os
 from pathlib import Path
+import uuid
 
 import requests
 import streamlit as st
 from dotenv import load_dotenv, set_key
+from data_loader import embed_texts, load_and_chunk_pdf
+from main import _context_prompt, _search_contexts, generate_answer
+from vector_db import get_qdrant_storage
 
 load_dotenv()
 ENV_FILE = Path(".env").resolve()
@@ -209,33 +213,25 @@ def _source_hint() -> str | None:
     return None
 
 
-def _fastapi_base_url() -> str:
-    return os.getenv("FASTAPI_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+def _ingest_pdf_locally(path: Path) -> int:
+    chunks = load_and_chunk_pdf(str(path.resolve()))
+    vectors = embed_texts(chunks)
+    source_id = path.name
+    ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_id}:{i}")) for i in range(len(chunks))]
+    payloads = [{"source": source_id, "text": chunks[i]} for i in range(len(chunks))]
+    get_qdrant_storage().upsert(ids, vectors, payloads)
+    return len(chunks)
 
 
-def _post_backend_json(path: str, payload: dict, timeout: float = 120) -> dict:
-    response = requests.post(f"{_fastapi_base_url()}{path}", json=payload, timeout=timeout)
-    if response.status_code == 405:
-        raise RuntimeError(
-            "FASTAPI_BASE_URL points to the Streamlit service. Set it to the separate FastAPI Render service URL."
-        )
-    response.raise_for_status()
-    return response.json()
-
-
-def _upload_pdf_to_backend(path: Path) -> dict:
-    with path.open("rb") as pdf_file:
-        response = requests.post(
-            f"{_fastapi_base_url()}/api/ingest",
-            files={"file": (path.name, pdf_file, "application/pdf")},
-            timeout=300,
-        )
-    if response.status_code == 405:
-        raise RuntimeError(
-            "FASTAPI_BASE_URL points to the Streamlit service. Set it to the separate FastAPI Render service URL."
-        )
-    response.raise_for_status()
-    return response.json()
+def _query_locally(question: str, top_k: int, source_hint: str | None = None) -> dict:
+    found = _search_contexts(question, top_k, source_hint)
+    contexts = found.get("contexts", [])
+    answer = generate_answer(_context_prompt(question, contexts))
+    return {
+        "answer": answer,
+        "sources": found.get("sources", []),
+        "num_contexts": len(contexts),
+    }
 
 
 st.title("Upload a PDF to Ingest")
@@ -246,8 +242,7 @@ if uploaded is not None:
         path = save_uploaded_pdf(uploaded)
         st.session_state["last_uploaded_source"] = path.name
         try:
-            result = _upload_pdf_to_backend(path)
-            ingested = int(result.get("ingested", 0))
+            ingested = _ingest_pdf_locally(path)
             st.success(f"Ingested {ingested} chunks and uploaded them to Qdrant: {path.name}")
             st.caption("You can upload another PDF if you like.")
         except Exception as exc:
@@ -265,10 +260,7 @@ with st.form("rag_query_form"):
         with st.spinner("Searching documents and generating answer..."):
             source_hint = _source_hint()
             try:
-                output = _post_backend_json(
-                    "/api/local-query-ai",
-                    {"question": question.strip(), "top_k": int(top_k), "source_hint": source_hint},
-                )
+                output = _query_locally(question.strip(), int(top_k), source_hint)
                 answer = output.get("answer", "")
                 sources = output.get("sources", [])
 
