@@ -101,6 +101,17 @@ def _current_provider(value: str, allowed: list[str], default: str) -> str:
     return default
 
 
+def _secret_input(label: str, key: str) -> str:
+    return st.sidebar.text_input(
+        label,
+        value="",
+        placeholder="Enter a new key to replace the current one",
+        type="password",
+        key=key,
+        help="The existing key is kept hidden. Leave this blank to keep it unchanged.",
+    )
+
+
 def _render_model_settings() -> None:
     llm_options = ["openai", "gemini", "claude", "ollama", "local"]
     embed_options = ["openai", "gemini", "ollama", "local"]
@@ -147,31 +158,12 @@ def _render_model_settings() -> None:
     st.sidebar.caption(f"Embedding dimension: {embed_dim} (auto)")
 
     st.sidebar.markdown("API Key Source")
-    st.sidebar.caption("You can input and save API keys here.")
-    openai_key = st.sidebar.text_input(
-        "OPENAI_API_KEY",
-        value=os.getenv("OPENAI_API_KEY", ""),
-        type="password",
-        key="settings_openai_key",
-    )
-    gemini_key = st.sidebar.text_input(
-        "GEMINI_API_KEY",
-        value=os.getenv("GEMINI_API_KEY", ""),
-        type="password",
-        key="settings_gemini_key",
-    )
-    claude_key = st.sidebar.text_input(
-        "ANTHROPIC_API_KEY",
-        value=os.getenv("ANTHROPIC_API_KEY", ""),
-        type="password",
-        key="settings_claude_key",
-    )
-    ollama_key = st.sidebar.text_input(
-        "OLLAMA_API_KEY",
-        value=os.getenv("OLLAMA_API_KEY", ""),
-        type="password",
-        key="settings_ollama_key",
-    )
+    st.sidebar.caption("Enter a new key only when replacing the current deployment secret.")
+    key_version = st.session_state.get("api_key_input_version", 0)
+    openai_key = _secret_input("OPENAI_API_KEY", f"settings_openai_key_{key_version}")
+    gemini_key = _secret_input("GEMINI_API_KEY", f"settings_gemini_key_{key_version}")
+    claude_key = _secret_input("ANTHROPIC_API_KEY", f"settings_claude_key_{key_version}")
+    ollama_key = _secret_input("OLLAMA_API_KEY", f"settings_ollama_key_{key_version}")
 
     save = st.sidebar.button("Save settings", key="settings_save")
 
@@ -191,6 +183,7 @@ def _render_model_settings() -> None:
         if ollama_key:
             _save_env("OLLAMA_API_KEY", ollama_key)
 
+        st.session_state["api_key_input_version"] = key_version + 1
         st.sidebar.success("Settings saved. Applying now...")
         st.rerun()
 
