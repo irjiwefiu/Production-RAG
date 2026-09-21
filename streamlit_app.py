@@ -199,11 +199,18 @@ _render_model_settings()
 
 @st.cache_resource
 def get_inngest_client() -> inngest.Inngest:
+    event_key = os.getenv("INNGEST_EVENT_KEY", "").strip()
+    if not event_key:
+        raise RuntimeError("INNGEST_EVENT_KEY is not configured for Inngest Cloud.")
+
+    api_base = os.getenv("INNGEST_API_BASE", "https://api.inngest.com/v1").rstrip("/")
+    api_origin = api_base.removesuffix("/v1")
     return inngest.Inngest(
         app_id="rag_app",
         is_production=True,
-        api_base_url=os.getenv("INNGEST_API_BASE", "https://api.inngest.com"),
+        api_base_url=api_origin,
         event_api_base_url=os.getenv("INNGEST_EVENT_API_BASE", "https://inn.gs"),
+        event_key=event_key,
     )
 
 
