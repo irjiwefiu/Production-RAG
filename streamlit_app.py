@@ -215,6 +215,10 @@ def _fastapi_base_url() -> str:
 
 def _post_backend_json(path: str, payload: dict, timeout: float = 120) -> dict:
     response = requests.post(f"{_fastapi_base_url()}{path}", json=payload, timeout=timeout)
+    if response.status_code == 405:
+        raise RuntimeError(
+            "FASTAPI_BASE_URL points to the Streamlit service. Set it to the separate FastAPI Render service URL."
+        )
     response.raise_for_status()
     return response.json()
 
@@ -225,6 +229,10 @@ def _upload_pdf_to_backend(path: Path) -> dict:
             f"{_fastapi_base_url()}/api/ingest",
             files={"file": (path.name, pdf_file, "application/pdf")},
             timeout=300,
+        )
+    if response.status_code == 405:
+        raise RuntimeError(
+            "FASTAPI_BASE_URL points to the Streamlit service. Set it to the separate FastAPI Render service URL."
         )
     response.raise_for_status()
     return response.json()

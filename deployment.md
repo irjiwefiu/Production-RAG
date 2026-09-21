@@ -50,7 +50,6 @@ FASTAPI_BASE_URL=https://<your-fastapi-service>.onrender.com
 Optional settings:
 
 ```text
-FASTAPI_BASE_URL=http://127.0.0.1:8000
 QDRANT_PATH=/tmp/qdrant_storage
 UPLOADS_DIR=/tmp/uploads
 ```
