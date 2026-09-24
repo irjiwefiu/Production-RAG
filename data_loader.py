@@ -89,7 +89,7 @@ def load_and_chunk_pdf(path: str):
     return chunks
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
+def embed_texts(texts: list[str], api_key: str | None = None) -> list[list[float]]:
     if not texts:
         return []
 
@@ -109,10 +109,10 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             raise RuntimeError(
                 "Gemini embeddings require google-generativeai. Install it with: pip install google-generativeai"
             ) from exc
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
+        gemini_api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) is required for EMBED_PROVIDER=gemini")
-        genai.configure(api_key=api_key)
+        genai.configure(api_key=gemini_api_key)
         vectors: list[list[float]] = []
         for text in texts:
             result = genai.embed_content(

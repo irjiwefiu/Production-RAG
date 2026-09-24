@@ -7,9 +7,7 @@
 
 A production-focused Retrieval-Augmented Generation (RAG) system for PDF ingestion and grounded Q&A.
 
-This repository includes:
-- A root application optimized for fast iteration with Streamlit, FastAPI, and Inngest workflow orchestration.
-- A packaged implementation under rag-engine with modular API, core services, and tests.
+This repository contains the root application: a Streamlit frontend, a FastAPI backend, provider-aware embeddings, and Qdrant storage.
 
 ## Why This Project
 .mod
@@ -37,19 +35,21 @@ Core design patterns:
 
 ```text
 .
-├── main.py                 # FastAPI + Inngest functions (root app)
-├── streamlit_app.py        # Streamlit UI with local fallback + preflight checks
-├── data_loader.py          # PDF loading, chunking, embeddings
-├── vector_db.py            # Qdrant integration with local fallback
-├── custom_types.py         # Pydantic models
-├── qdrant_storage/         # Embedded/local Qdrant data path
-├── uploads/                # Uploaded PDFs
-├── doc.md                  # Extended technical walkthrough
-├── src/rag_engine/
-├── tests/
-├── docker/
-└── pyproject.toml
+├── main.py                 # FastAPI routes and provider orchestration
+├── streamlit_app.py        # Streamlit UI and session configuration
+├── data_loader.py          # PDF loading, chunking, and embeddings
+├── vector_db.py            # Qdrant integration and collection lifecycle
+├── custom_types.py         # Shared Pydantic models
+├── docs/                   # Architecture and developer documentation
+├── tests/                  # Fast, isolated smoke tests
+├── .env.example            # Safe configuration template
+├── deployment.md           # Render deployment guide
+├── qdrant_storage/         # Runtime local Qdrant data (ignored)
+├── uploads/                # Runtime uploaded PDFs (ignored)
+└── pyproject.toml          # Dependencies and package metadata
 ```
+
+See [docs/architecture.md](docs/architecture.md) for service boundaries and request flow.
 
 ## Quick Start (Windows PowerShell)
 
@@ -77,7 +77,7 @@ Open: http://127.0.0.1:8501
 
 This mode is enough to ingest and query with local fallback behavior.
 
-## Full Workflow Mode (Streamlit + FastAPI + Inngest)
+## Full Workflow Mode (Streamlit + FastAPI)
 
 Run each service in a separate terminal from repository root.
 
@@ -88,13 +88,7 @@ $env:INNGEST_DEV='1'
 python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-### Terminal B: Inngest Dev Server
-
-```powershell
-.\.tools\inngest\inngest.exe dev -u http://127.0.0.1:8000/api/inngest --no-discovery
-```
-
-### Terminal C: Streamlit UI
+### Terminal B: Streamlit UI
 
 ```powershell
 python -m streamlit run streamlit_app.py
@@ -102,8 +96,7 @@ python -m streamlit run streamlit_app.py
 
 Expected endpoints:
 - Streamlit: http://127.0.0.1:8501
-- FastAPI Inngest endpoint: http://127.0.0.1:8000/api/inngest
-- Inngest Dev Server: http://127.0.0.1:8288
+- FastAPI: http://127.0.0.1:8000
 
 ## Configuration
 
@@ -124,29 +117,12 @@ Important variables:
 
 Note: Keep secrets such as API keys in .env and never commit them.
 
-## Running The Packaged Service (rag-engine)
+## Tests
 
-If you want the package-based API/UI implementation:
-
-```powershell
-cd rag-engine
-python -m pip install -e .[dev]
-python -m uvicorn rag_engine.api.app:app --reload --port 8000
-```
-
-Optional commands (from rag-engine):
+Run the smoke tests from the repository root:
 
 ```powershell
-pytest
-ruff check src tests
-```
-
-## Docker (rag-engine)
-
-From rag-engine directory:
-
-```powershell
-docker compose -f docker/docker-compose.yml up --build
+python -m pytest
 ```
 
 This launches Qdrant and the packaged API service.

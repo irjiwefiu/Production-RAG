@@ -1,5 +1,6 @@
 import logging
-from fastapi import FastAPI, File, UploadFile
+import shutil
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from dotenv import load_dotenv
 import uuid
 import os
@@ -155,7 +156,7 @@ def _local_answer(user_content: str) -> str:
     return "I don't know based on provided documents."
 
 
-def generate_answer(user_content: str) -> str:
+def generate_answer(user_content: str, api_key: str | None = None) -> str:
     system_prompt = (
         "You are a strict retrieval assistant. "
         "Answer ONLY from provided context. "
@@ -188,10 +189,10 @@ def generate_answer(user_content: str) -> str:
             raise RuntimeError(
                 "Gemini support requires google-generativeai. Install it with: pip install google-generativeai"
             ) from exc
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
+        gemini_api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) is required for LLM_PROVIDER=gemini")
-        genai.configure(api_key=api_key)
+        genai.configure(api_key=gemini_api_key)
         model = genai.GenerativeModel(
             model_name=gemini_model,
             system_instruction=system_prompt,
@@ -264,8 +265,13 @@ class LocalQueryRequest(BaseModel):
     source_hint: str | None = None
 
 
-def _search_contexts(question: str, top_k: int, source_hint: str | None = None) -> dict:
-    query_vec = embed_texts([question])[0]
+def _search_contexts(
+    question: str,
+    top_k: int,
+    source_hint: str | None = None,
+    api_key: str | None = None,
+) -> dict:
+    query_vec = embed_texts([question], api_key=api_key)[0]
     search_limit = min(max(int(top_k), 12 if _is_skill_question(question) else int(top_k)), 20)
     raw = get_qdrant_storage().search(query_vec, search_limit)
     records = raw.get("records", []) if isinstance(raw, dict) else []
@@ -302,7 +308,10 @@ app = FastAPI()
 
 
 @app.post("/api/ingest")
-async def ingest_pdf(file: UploadFile = File(...)):
+async def ingest_pdf(
+    file: UploadFile = File(...),
+    x_gemini_api_key: str | None = Header(default=None),
+):
     uploads_dir = "uploads"
     os.makedirs(uploads_dir, exist_ok=True)
     filename = os.path.basename(file.filename or "document.pdf")
@@ -311,7 +320,7 @@ async def ingest_pdf(file: UploadFile = File(...)):
         output_file.write(await file.read())
 
     chunks = load_and_chunk_pdf(pdf_path)
-    vectors = embed_texts(chunks)
+    vectors = embed_texts(chunks, api_key=x_gemini_api_key)
     ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"{filename}:{i}")) for i in range(len(chunks))]
     payloads = [{"source": filename, "text": chunks[i]} for i in range(len(chunks))]
     get_qdrant_storage().upsert(ids, vectors, payloads)
@@ -330,8 +339,11 @@ async def local_ingest(payload: LocalIngestRequest):
 
 
 @app.post("/api/local-query-context")
-async def local_query_context(payload: LocalQueryRequest):
-    found = _search_contexts(payload.question, int(payload.top_k), payload.source_hint)
+async def local_query_context(
+    payload: LocalQueryRequest,
+    x_gemini_api_key: str | None = Header(default=None),
+):
+    found = _search_contexts(payload.question, int(payload.top_k), payload.source_hint, x_gemini_api_key)
     contexts = found.get("contexts", [])
     answer = _evidence_only_answer(payload.question, contexts)
     return {
@@ -342,12 +354,38 @@ async def local_query_context(payload: LocalQueryRequest):
 
 
 @app.post("/api/local-query-ai")
-async def local_query_ai(payload: LocalQueryRequest):
-    found = _search_contexts(payload.question, int(payload.top_k), payload.source_hint)
+async def local_query_ai(
+    payload: LocalQueryRequest,
+    x_gemini_api_key: str | None = Header(default=None),
+):
+    found = _search_contexts(payload.question, int(payload.top_k), payload.source_hint, x_gemini_api_key)
     contexts = found.get("contexts", [])
-    answer = generate_answer(_context_prompt(payload.question, contexts))
+    try:
+        answer = generate_answer(_context_prompt(payload.question, contexts), api_key=x_gemini_api_key)
+    except Exception as exc:
+        error_text = str(exc).lower()
+        if "quota" in error_text or "resourceexhausted" in error_text or "429" in error_text:
+            raise HTTPException(
+                status_code=429,
+                detail="The AI provider quota is exhausted. Please try again later or use another provider/model.",
+            ) from exc
+        raise
     return {
         "answer": answer,
         "sources": found.get("sources", []),
         "num_contexts": len(contexts),
     }
+
+
+@app.post("/api/reset")
+async def reset_application():
+    uploads_dir = "uploads"
+    if os.path.isdir(uploads_dir):
+        for filename in os.listdir(uploads_dir):
+            path = os.path.join(uploads_dir, filename)
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+    get_qdrant_storage().clear()
+    return {"reset": True}
