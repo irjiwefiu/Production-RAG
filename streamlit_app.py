@@ -145,14 +145,14 @@ def _reset_on_new_session() -> None:
     _clear_local_uploads()
     try:
         response = requests.post(f"{_fastapi_base_url()}/api/reset", timeout=120)
+        response.raise_for_status()
     except requests.exceptions.RequestException as exc:
         st.sidebar.warning(
             "FastAPI reset was unavailable. Start it with `python -m uvicorn main:app --reload` "
-            f"before uploading or asking questions. ({exc.__class__.__name__})"
+            f"before uploading or asking questions. ({exc})"
         )
         st.session_state["session_initialized"] = True
         return
-    response.raise_for_status()
     st.session_state["session_initialized"] = True
 
 

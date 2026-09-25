@@ -85,7 +85,8 @@ class QdrantStorage:
         self.client.upsert(self.collection, points=points)
 
     def clear(self) -> None:
-        self.client.delete_collection(self.collection)
+        if self.client.collection_exists(self.collection):
+            self.client.delete_collection(self.collection)
         self.client.create_collection(
             collection_name=self.collection,
             vectors_config=VectorParams(size=self.dim, distance=Distance.COSINE),
